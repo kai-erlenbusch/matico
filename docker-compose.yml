@@ -1,26 +1,40 @@
-version: "3.9"
+version: "3.8"
 services:
   matico:
     build: .
+    ports:
+      - "8000:8000"
+      - "3000:3000"
     environment:
-      DB_HOST: db
-      DB_USERNAME: matico
-      DB_PASSWORD: password 
-      DB_NAME: matico 
-      DATADB_HOST: db
-      DATADB_USERNAME: matico
-      DATADB_PASSWORD: password 
-      DATADB_NAME: matico 
+      - DB_HOST=db
+      - DB_USERNAME=matico
+      - DB_PASSWORD=password
+      - DB_NAME=matico
+      - DATADB_HOST=db
+      - DATADB_USERNAME=matico
+      - DATADB_PASSWORD=password
+      - DATADB_NAME=matico
+      - SERVER_ADDR=0.0.0.0:8000
+      - DATABASE_URL=postgres://matico:password@db:5432/matico
     depends_on:
-      - "db"
+      db:
+        condition: service_healthy
+    restart: on-failure
+
   db:
-    image: postgres
+    # We pin this to version 13 to avoid the "volume mount" crash you saw earlier
+    image: postgres:13
     restart: always
     ports:
-       - '5438:5432'
-    volumes: 
-       - ./postgres-data:/var/lib/postgresql/data
+      - '5438:5432'
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
     environment:
-      POSTGRES_USER: matico
-      POSTGRES_PASSWORD: password 
-      POSTGRES_DB: matico 
+      - POSTGRES_USER=matico
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=matico
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U matico -d matico"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

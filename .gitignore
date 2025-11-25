@@ -20,3 +20,4 @@ matico_charts/package-lock.json
 matico_spec/bindings
 
 bindings
+postgres-data/

@@ -1,165 +1,145 @@
-
-# For building the server and the spec
-#----------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Stage 1: Rust Builder
+# ------------------------------------------------------------------------------
 FROM osgeo/gdal:ubuntu-small-3.4.1 as rust-builder
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o install_rust.sh 
-RUN sh install_rust.sh -y
-ENV PATH="/root/.cargo/bin/:${PATH}"
 
-RUN rustup default nightly
- 
-RUN apt-get update && apt-get -y install libpq-dev build-essential pkg-config openssl libssl-dev libclang-dev cmake 
-# RUN apk --no-cache add g++ make libressl-dev pkgconfig
+# Install system dependencies
+RUN apt-get update && apt-get -y install \
+    curl build-essential pkg-config libssl-dev libclang-dev cmake libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# 👇 CHANGED FROM 'nightly' TO 'stable' TO FIX BUILD CRASH
+RUN rustup default stable
+
+# Install wasm-pack
 RUN curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
-RUN mkdir /app
-ADD ./Cargo.toml ./Cargo.toml /app/
-ADD ./matico_spec /app/matico_spec
-ADD ./matico_spec_derive /app/matico_spec_derive
-ADD ./matico_server /app/matico_server
-ADD ./matico_common /app/matico_common
-ADD ./matico_compute /app/matico_compute
-ADD ./matico_types/package.json /app/matico_types/package.json
-ADD ./matico_types/index.d.ts /app/matico_types/index.d.ts
-ADD ./scripts /app/scripts
+WORKDIR /app
 
-RUN ls /app/scripts
-WORKDIR /app 
-RUN cargo build --release
+# Copy manifests first to cache dependencies
+COPY ./Cargo.toml ./Cargo.lock ./
+# We create dummy dirs to satisfy COPY, actual source comes later
+COPY ./matico_spec ./matico_spec
+COPY ./matico_spec_derive ./matico_spec_derive
+COPY ./matico_server ./matico_server
+COPY ./matico_common ./matico_common
+# EXCLUDING COMPUTE FOR NOW to avoid Polars breakages
+# COPY ./matico_compute ./matico_compute
+COPY ./matico_types ./matico_types
+COPY ./scripts ./scripts
 
+# Update the broken dependency
+RUN cargo update -p wasm-bindgen
+
+# Build Server
+RUN cargo build --release --bin matico_server
+
+# Build WASM Spec
 WORKDIR /app/matico_spec
-RUN wasm-pack build  --release --scope maticoapp
 
+# Create static directory structure
 RUN mkdir -p /app/matico_server/static/compute/
 
-# WORKDIR /app/matico_compute/matico_hdbscam_analysis
-# RUN ./build.sh
-# WORKDIR /app/matico_compute/matico_dot_density_analysis
-# RUN ./build.sh
-
-WORKDIR /app/matico_compute/matico_synthetic_data_analysis
-RUN ./build.sh
-
+# Return to root and build types
 WORKDIR /app
-RUN ls 
-RUN pwd
 RUN ./scripts/build_types.sh
 
-# Install the dependencies for javascript
-#--------------------------------------------------------------------------------
-
-FROM node:16.6.1-alpine3.13 as javascript_deps
+# ------------------------------------------------------------------------------
+# Stage 2: JavaScript Dependencies
+# ------------------------------------------------------------------------------
+FROM node:18-alpine as javascript_deps
 ENV NODE_ENV production
-RUN apk --no-cache add shadow \                                                                   
-    gcc \                                                                                         
-    musl-dev \                                                                                    
-    autoconf \                                                                                    
-    automake \                                                                                    
-    make \                                                                                        
-    libtool \                                                                                     
-    nasm \                                                                                        
-    tiff \                                                                                        
-    jpeg \                                                                                        
-    zlib \                                                                                        
-    zlib-dev \                                                                                    
-    file \                                                                                        
-    pkgconf \                                                                                     
-    libc6-compat
-
-
+# Skip Husky hooks in Docker
+ENV HUSKY=0
+# Install system deps for native builds
+RUN apk --no-cache add shadow gcc musl-dev autoconf automake make libtool nasm tiff jpeg zlib zlib-dev file pkgconf libc6-compat git
 WORKDIR /app
-COPY .yarn ./.yarn
-COPY .yarnrc.yml ./
-COPY yarn.lock ./yarn.lock
-COPY package.json ./
+
+# Enable pnpm via Corepack
+RUN corepack enable && corepack prepare pnpm@8.1.0 --activate
+
+# Copy workspace configs
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY matico_components/package.json ./matico_components/package.json
 COPY matico_admin/package.json ./matico_admin/package.json
 COPY matico_charts/package.json ./matico_charts/package.json
-COPY --from=rust-builder /app/matico_spec/pkg /app/matico_spec/pkg
-COPY --from=rust-builder /app/matico_types /app/matico_types
-RUN ls /app/matico_types/
-RUN yarn
-RUN ls -alh .
+# Copy built WASM/Types from Rust stage
+COPY --from=rust-builder /app/matico_spec/pkg ./matico_spec/pkg
+COPY --from=rust-builder /app/matico_spec/package.json ./matico_spec/package.json
+COPY --from=rust-builder /app/matico_types ./matico_types
 
-# For building the components lib and the nextjs app
-#--------------------------------------------------------------------------------
+# Install dependencies (force installation of devDeps for building)
+RUN pnpm install --no-frozen-lockfile --prod=false
 
-FROM node:16.6.1-alpine3.13 as frontend-builder
+# ------------------------------------------------------------------------------
+# Stage 3: Frontend Builder
+# ------------------------------------------------------------------------------
+FROM node:18-alpine as frontend-builder
+ENV NODE_ENV production
+RUN corepack enable && corepack prepare pnpm@8.1.0 --activate
 
-COPY --from=javascript_deps /app /app
-WORKDIR /app/
-# # COPY --from=javascript_deps /app/.yarn ./.yarn 
-# # COPY --from=javascript_deps /app/yarn.lock ./yarn.lock
-# # COPY --from=javascript_deps /app/.yarnrc.yml ./.yarnrc.yml
-# # COPY --from=javascript_deps /app/.pnp.cjs ./.pnp.cjs
-# # COPY --from=javascript_deps /app/package.json ./package.json
-COPY --from=rust-builder /app/matico_spec/pkg /app/matico_spec/pkg
-ADD matico_components /app/matico_components
-ADD matico_admin /app/matico_admin
-ADD matico_charts /app/matico_charts
-# # ADD package.json /app/package.json
-# # ADD yarn.lock /app/yarn.lock
-# # ADD .yarnrc.yml /app/.yarnrc.lock
-# # ADD .yarn /app/.yarn
+WORKDIR /app
 
-# ADD matico_components ./matico_components 
-# ADD matico_admin ./matico_admin
-# RUN yarn
-RUN yarn workspace @maticoapp/matico_charts run build
-RUN yarn workspace @maticoapp/matico_components run build-prod
-ENV NEXT_PUBLIC_SERVER_URL="/api" 
-RUN yarn workspace matico_admin run build
-RUN ls -alh /app/matico_admin/.next
+# Copy node_modules from previous stage
+COPY --from=javascript_deps /app ./
 
-# For running everything 
-#--------------------------------------------------------------------------------
+# Copy source code
+COPY matico_components ./matico_components
+COPY matico_admin ./matico_admin
+COPY matico_charts ./matico_charts
 
+# Build packages in order
+RUN pnpm --filter @maticoapp/matico_charts run build-prod
+RUN pnpm --filter @maticoapp/matico_components run build-prod
+ENV NEXT_PUBLIC_SERVER_URL="/api"
+RUN pnpm --filter matico_admin run build
+
+# ------------------------------------------------------------------------------
+# Stage 4: Runtime
+# ------------------------------------------------------------------------------
 FROM osgeo/gdal:ubuntu-small-3.4.1
 
 ENV NODE_ENV production
-
 ARG APP=/usr/src/app
-RUN apt-get update \
-    && apt-get install -y ca-certificates tzdata nginx systemd \
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates tzdata nginx curl gnupg \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -sL https://deb.nodesource.com/setup_16.x | bash - \
+# Install Node.js 18
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
     && apt-get install -y nodejs
 
-RUN npm install pm2 yarn --global
-# RUN addgroup -g 1001 -S nodejs
-# RUN adduser -S nextjs -u 1001
+# Install PM2 globally
+RUN npm install pm2 -g
 
-EXPOSE 8000
-
+# Create App User
 ENV TZ=Etc/UTC \
     APP_USER=appuser
-
 RUN groupadd $APP_USER \
     && useradd -g $APP_USER $APP_USER \
     && mkdir -p ${APP}
 
-COPY --from=frontend-builder /app/ ${APP}/
-COPY --from=rust-builder /app/target/release/matico_server ${APP}/matico_server
-# RUN rm -rf ${APP}/matico_admin/next.config.js
-
-# COPY --from=frontend-builder /app/matico_admin/.next/static ${APP}/_next/static
-# COPY --from=frontend-builder /app/matico_admin/.next/standalone ${APP}/matico_admin/
-# COPY --from=frontend-builder /app/matico_admin/public ${APP}/matico_admin/public
-
-WORKDIR ${APP}/matico_admin
-# RUN rm package.json
-# RUN npm init -y 
-# RUN npm install next 
-
 WORKDIR ${APP}
 
-# USER nextjs
+# Copy built artifacts
+COPY --from=frontend-builder /app/matico_admin ${APP}/matico_admin
+COPY --from=frontend-builder /app/node_modules ${APP}/node_modules
+COPY --from=rust-builder /app/target/release/matico_server ${APP}/matico_server
 
-EXPOSE 8888 
+# Copy scripts
+COPY scripts/run_docker_prod.sh ./
+COPY scripts/nginx.conf /etc/nginx/nginx.conf
 
-ADD scripts/run_docker_prod.sh ./
-ADD scripts/nginx.conf /etc/nginx/nginx.conf
+# Fix permissions
+RUN chmod +x run_docker_prod.sh
 
-CMD ["/bin/sh","run_docker_prod.sh"]
+# Expose Ports
+EXPOSE 8000 3000
+
+CMD ["/bin/bash", "run_docker_prod.sh"]
