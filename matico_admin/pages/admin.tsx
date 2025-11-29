@@ -1,15 +1,11 @@
-import type { NextPage } from "next";
-import { Layout } from "../components/Layout";
-import { View } from "@adobe/react-spectrum";
+import React from 'react';
+import dynamic from 'next/dynamic';
 
-const Admin: NextPage = () => {
-  return (
-    <Layout hasSidebar={true}>
-      <View backgroundColor="blue-600" gridArea="sidebar" />
-      <View backgroundColor="purple-600" gridArea="content" />
-      <View backgroundColor="magenta-600" gridArea="footer" />
-    </Layout>
-  );
-};
+const ClientPage = dynamic(() => import('../components/PageWrappers/admin'), { 
+  ssr: false,
+  loading: () => <div style={{padding: 20}}>Loading...</div>
+});
 
-export default Admin;
+export default function Page(props: any) {
+  return <ClientPage {...props} />;
+}

@@ -1,48 +1,11 @@
-import type { NextPage } from "next";
-import { Layout } from "../components/Layout";
+import React from 'react';
+import dynamic from 'next/dynamic';
 
-import {
-  Flex,
-  Heading,
-  View,
-  Text,
-  ListBox,
-  Item,
-} from "@adobe/react-spectrum";
-import { LoginSignupDialog } from "../components/LoginSignUpDialog";
-import { useUser } from "../hooks/useUser";
+const ClientPage = dynamic(() => import('../components/PageWrappers/index'), { 
+  ssr: false,
+  loading: () => <div style={{padding: 20}}>Loading...</div>
+});
 
-const Home: NextPage = () => {
-  const { user } = useUser();
-
-  return (
-    <Layout hasSidebar={false}>
-      <Flex
-        width="100%"
-        height="100%"
-        gridArea="content"
-        direction="column"
-        justifyContent="center"
-        alignItems="center"
-        gap={"size-400"}
-      >
-        <Heading level={1}>Welcome to Matico</Heading>
-        <View width="50vw">
-          <img alt="splash" src={"/main_bg.png"} width={"100%"} />
-        </View>
-        <Text>
-          Matico is a tool to help you easily curate, share and analyse datasets
-          and build apis and apps.
-        </Text>
-
-        {!user && (
-          <>
-            <LoginSignupDialog popover={false} />
-          </>
-        )}
-      </Flex>
-    </Layout>
-  );
-};
-
-export default Home;
+export default function Page(props: any) {
+  return <ClientPage {...props} />;
+}

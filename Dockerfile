@@ -60,7 +60,7 @@ RUN apk --no-cache add shadow gcc musl-dev autoconf automake make libtool nasm t
 WORKDIR /app
 
 # Enable pnpm via Corepack
-RUN corepack enable && corepack prepare pnpm@8.1.0 --activate
+RUN corepack enable && corepack prepare pnpm@10.22.0 --activate
 
 # Copy workspace configs
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
@@ -73,14 +73,14 @@ COPY --from=rust-builder /app/matico_spec/package.json ./matico_spec/package.jso
 COPY --from=rust-builder /app/matico_types ./matico_types
 
 # Install dependencies (force installation of devDeps for building)
-RUN pnpm install --no-frozen-lockfile --prod=false
+RUN pnpm install --frozen-lockfile --prod=false
 
 # ------------------------------------------------------------------------------
 # Stage 3: Frontend Builder
 # ------------------------------------------------------------------------------
 FROM node:18-alpine as frontend-builder
 ENV NODE_ENV production
-RUN corepack enable && corepack prepare pnpm@8.1.0 --activate
+RUN corepack enable && corepack prepare pnpm@10.22.0 --activate
 
 WORKDIR /app
 
